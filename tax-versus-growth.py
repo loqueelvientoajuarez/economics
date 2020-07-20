@@ -7,9 +7,9 @@ import numpy as np
 from scipy.stats import linregress
 from matplotlib import pylab as plt
 
-tax = Table.read('tax-revenue.csv', encoding='utf-8-sig') 
-pop = Table.read('population-growth.csv', encoding='utf-8-sig')
-gdp = Table.read('gdp-growth.csv', encoding='utf-8-sig')
+tax = Table.read('oecd/tax-revenue.csv', encoding='utf-8-sig') 
+pop = Table.read('oecd/population-growth.csv', encoding='utf-8-sig')
+gdp = Table.read('oecd/gdp-growth.csv', encoding='utf-8-sig')
 
 # convert quartely to yearly
 gdp_year = [int(t[0:4]) for t in gdp['TIME']]
