@@ -1,8 +1,34 @@
+#! /usr/bin/env python3
+
 from astropy import table 
 import numpy as np
+from scipy.stats import linregress
+from matplotlib import pylab as plt
+from scipy.optimize import curve_fit
 
 def average_growth(x, freq=1):
     return 100 * (np.prod( (1 + x/100) ** (freq / len(x))) - 1)
+
+def linear_model(X, *p):
+    return p[0] + np.dot(X, p[1:])
+
+def kappa_sigma_regress(x, y, kappa=3.0):
+    keep = np.ones((len(y),), dtype=bool)
+    for i in range(3):
+        xp, yp = x[keep], y[keep]
+        reg = linregress(xp, yp)
+        r = y - (reg.slope * x + reg.intercept)
+        keep &= abs(r) <= kappa * r[keep].std()
+    return reg, keep
+    
+def kappa_sigma_multiregress(X, y, kappa=3.0):
+    keep = np.ones((len(y),), dtype=bool)
+    p0 = np.zeros((X.shape[1]+1,))
+    for i in range(3):
+        p, pcov = curve_fit(linear_model, X[keep], y[keep], p0=p0)
+        res = y - linear_model(X, *p)
+        keep &= abs(res) <= kappa * res[keep].std()
+    return p, pcov, keep
 
 def parse_table(tab, short_names=False):
     columns = ['INDICATOR', 'SUBJECT', 'MEASURE']
@@ -56,7 +82,7 @@ def bin(tab, bins):
     # define the bins and add columns
     bins = np.array(bins)
     nbins = len(bins) - 1
-    bin_number = (tab['YEAR'] < bins[:,None]).sum(axis=0) - 1
+    bin_number = (tab['YEAR'] >= bins[:,None]).sum(axis=0) - 1 
     keep = (bin_number >= 0) * (bin_number < nbins)
     tab = tab[keep]
     bin_number = bin_number[keep]
@@ -75,12 +101,56 @@ def bin(tab, bins):
     
 
 if __name__ == "__main__":
-    filenames = ['population-growth.csv', 
-                 'elderly.csv',
-                 'tax-revenue.csv', 
-                 'public-debt.csv',
-                 'gdp-growth.csv'
+    filenames = ['oecd/population-growth.csv', 
+                 'oecd/elderly.csv',
+                 'oecd/tax-revenue.csv', 
+                 'oecd/public-debt.csv',
+                 'oecd/gdp.csv',
+                 'oecd/gdp-growth.csv',
                 ]
-    bins = [1998, 2008, 2018]
-    tab = join(filenames) 
-    binned = bin(tab, bins=[1998, 2008, 2018])
+    bins = [1996, 2003, 2012, 2018]
+    tab0 = join(filenames) 
+    tab = bin(tab0, bins=bins)
+    G = ((
+                    (1+tab['GDP_TOT_PC_CHGPY']/100) 
+                  / (1+tab['POP_TOT_AGRWTH']/100)
+                 ) - 1) * 100
+    variables = {
+        'public debt [%GDP]': tab['GGDEBT_TOT_PC_GDP'],
+#         'elderly population [%total]': tab['ELDLYPOP_TOT_PC_POP'],
+        'tax revenue [%GPD]': tab['TAXREV_TOT_PC_GDP'],
+        'log GDP [log USD]': np.log10(tab['GDP_TOT_USD_CAP'])
+    }    
+    fig = plt.figure(1, figsize=(8, 6))
+    fig.clf()
+    for i, var in enumerate(variables):
+        ax = fig.add_subplot(2, 2, i + 1)
+        x = variables[var]
+        for years in np.unique(tab['YEARS']):
+            keep = tab['YEARS'] == years
+            xp, yp = x[keep], G[keep]
+            (a, b, r, p, e), kept = kappa_sigma_regress(xp, yp)
+            nclipped = len(kept) - sum(kept)
+            print(f"{var} {years} {a:6.3f}±{e:5.3f} [p-value {p:5.3f}, clipped {nclipped}]")
+            scatter = ax.plot(xp[kept], yp[kept], 'o', label=years)[0]
+            color = scatter.get_markerfacecolor()
+            ax.plot(xp[~kept], yp[~kept], 'o', color=color, alpha=0.2)
+            xr = np.array([min(xp), max(xp)])
+            yr = a * xr + b
+            ax.plot(xr, yr, '-', color=color)
+        ax.legend()
+        ax.set_xlabel(var)
+        ax.set_ylabel('GDP/capita growth [%/year]')
+    print('---')
+    for year in np.unique(tab['YEARS']):
+        keep = tab['YEARS'] == year
+        X = np.array([v for v in variables.values()]).T
+        Xp, yp = X[keep], G[keep]
+        p, pcov, kept = kappa_sigma_multiregress(Xp, yp)
+        A = p[1:] # coeff
+        dA = np.sqrt(pcov.diagonal()[1:])
+        nclipped = len(kept) - sum(kept)
+        for var, a, da in zip(variables, A, dA):
+            print(f"{year} {var} {a:6.3f}±{da:5.3f} [clipped: {nclipped}]")
+        print('---')
+
